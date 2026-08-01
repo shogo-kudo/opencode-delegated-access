@@ -193,18 +193,66 @@ describe("runRiskyPathInBackground", () => {
       // When: runRiskyPathInBackground is called for a RISKY command
       await runRiskyPathInBackground(args)
 
-      // Then: client.tui.showToast is called with body containing warning variant, title containing RISKY, message containing command and reason, and sendNotification is NOT called
+      // Then: client.tui.showToast is called with Japanese title/message and sendNotification is NOT called
       expect(showToast).toHaveBeenCalledTimes(1)
-      expect(showToast).toHaveBeenCalledWith({
-        body: expect.objectContaining({
-          title: expect.stringMatching(/RISKY/),
-          message: expect.stringContaining("rm -rf build"),
-          variant: "warning",
-          duration: expect.any(Number),
-        }),
-      })
       const toastArg = showToast.mock.calls[0]?.[0]
-      expect(toastArg?.body.message).toContain("destructive rm")
+      expect(toastArg?.body).toEqual({
+        title: "危険な操作の確認",
+        message: "rm -rf build (この操作には確認が必要です)",
+        variant: "warning",
+        duration: expect.any(Number),
+      })
+      expect(toastArg?.body.message).not.toContain("destructive rm")
+      expect(mockedSend).not.toHaveBeenCalled()
+    })
+
+    it("uses the Japanese fallback message when reason is empty, while preserving directory path", async () => {
+      // Given: reason is empty and command is a directory path deletion
+      const { client, showToast } = makeMockClient()
+      const args = {
+        ...baseArgs,
+        client,
+        reason: "",
+        command: "rm -rf /tmp/build",
+        macosNotificationPolicy: "classifier-failure-only" as const,
+      }
+
+      // When: runRiskyPathInBackground is called for a RISKY command
+      await runRiskyPathInBackground(args)
+
+      // Then: the toast body keeps the directory path and uses the fallback reason in Japanese
+      const toastArg = showToast.mock.calls[0]?.[0]
+      expect(toastArg?.body).toEqual({
+        title: "危険な操作の確認",
+        message: "rm -rf /tmp/build (この操作には確認が必要です)",
+        variant: "warning",
+        duration: expect.any(Number),
+      })
+      expect(mockedSend).not.toHaveBeenCalled()
+    })
+
+    it("keeps a Japanese reason verbatim in the TUI toast message", async () => {
+      // Given: reason is already Japanese and policy is classifier-failure-only
+      const { client, showToast } = makeMockClient()
+      const args = {
+        ...baseArgs,
+        client,
+        reason: "このコマンドはビルド成果物を削除します",
+        command: "rm -rf output-dir",
+        macosNotificationPolicy: "classifier-failure-only" as const,
+      }
+
+      // When: runRiskyPathInBackground is called for a RISKY command
+      await runRiskyPathInBackground(args)
+
+      // Then: the toast body preserves the Japanese reason text verbatim
+      const toastArg = showToast.mock.calls[0]?.[0]
+      expect(toastArg?.body).toEqual({
+        title: "危険な操作の確認",
+        message: `rm -rf output-dir (このコマンドはビルド成果物を削除します)`,
+        variant: "warning",
+        duration: expect.any(Number),
+      })
       expect(mockedSend).not.toHaveBeenCalled()
     })
 
@@ -225,9 +273,10 @@ describe("runRiskyPathInBackground", () => {
       expect(showToast).toHaveBeenCalledTimes(1)
       expect(showToast).toHaveBeenCalledWith({
         body: expect.objectContaining({
-          title: expect.stringMatching(/RISKY/),
-          message: expect.stringContaining("rm -rf build"),
+          title: "危険な操作の確認",
+          message: "rm -rf build (この操作には確認が必要です)",
           variant: "warning",
+          duration: expect.any(Number),
         }),
       })
       expect(mockedSend).toHaveBeenCalledTimes(1)

@@ -7,6 +7,8 @@ type OpencodeClient = ReturnType<typeof createOpencodeClient>
 
 /** Upper bound on the command string we embed in the notification body. */
 const COMMAND_DISPLAY_MAX = 180
+const JAPANESE_SCRIPT_REGEX = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u
+const TUI_RISKY_REASON_FALLBACK = "この操作には確認が必要です"
 
 /** Button labels used for the RISKY notification. */
 const APPROVE_LABEL = "Approve"
@@ -46,12 +48,16 @@ export async function runRiskyPathInBackground(args: {
       : command
 
   const displayReason = reason.length > 0 ? ` (${reason})` : ""
+  const tuiDisplayReason =
+    reason.length > 0 && JAPANESE_SCRIPT_REGEX.test(reason)
+      ? displayReason
+      : ` (${TUI_RISKY_REASON_FALLBACK})`
 
   try {
     await client.tui.showToast({
       body: {
-        title: "delegated-access: RISKY command",
-        message: `${displayCmd}${displayReason}`,
+        title: "危険な操作の確認",
+        message: `${displayCmd}${tuiDisplayReason}`,
         variant: "warning",
         duration: timeoutSec * 1000,
       },
