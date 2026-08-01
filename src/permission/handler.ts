@@ -606,14 +606,18 @@ async function runSafeOrRiskyPath(args: {
   const { log } = ctx
 
   if (verdict.verdict === "SAFE") {
+    const effectiveCountdownMs =
+      ctx.config.macosNotificationPolicy === "all"
+        ? ctx.config.safeCountdownMs
+        : 0
     log.info("entering safe-path", {
       ...base,
-      countdownMs: ctx.config.safeCountdownMs,
+      countdownMs: effectiveCountdownMs,
     })
     const decision = await runSafePath({
       command: subject,
       reason: verdict.reason,
-      countdownMs: ctx.config.safeCountdownMs,
+      countdownMs: effectiveCountdownMs,
       sound: ctx.config.notificationSound,
       log,
       batcher: ctx.safePathBatcher,
@@ -644,8 +648,10 @@ async function runSafeOrRiskyPath(args: {
     return
   }
 
-  log.info("risky — escalating via TUI + notification", base)
-  // RISKY: fire the notification alongside opencode's TUI prompt.
+  log.info("risky — handling via TUI prompt and notification policy", {
+    ...base,
+    macosNotificationPolicy: ctx.config.macosNotificationPolicy,
+  })
   void runRiskyPathInBackground({
     client: ctx.client,
     sessionID: permission.sessionID,
@@ -654,6 +660,8 @@ async function runSafeOrRiskyPath(args: {
     reason: verdict.reason,
     sound: ctx.config.notificationSound,
     timeoutSec: 60,
+    macosNotificationPolicy: ctx.config.macosNotificationPolicy,
+    log: ctx.log,
   })
 }
 

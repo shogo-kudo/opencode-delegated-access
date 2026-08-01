@@ -18,21 +18,42 @@ function makeMockClient(responseImpl?: (opts: unknown) => Promise<unknown>) {
   const call = vi.fn(
     responseImpl ?? (async () => ({ data: true } as unknown)),
   )
+  const showToast = vi.fn(
+    async (_opts?: {
+      body: {
+        title?: string
+        message: string
+        variant: string
+        duration?: number
+      }
+    }) => {},
+  )
   return {
     client: {
       postSessionIdPermissionsPermissionId: call,
+      tui: {
+        showToast,
+      },
     } as never,
     call,
+    showToast,
   }
 }
 
-const baseArgs = {
+const baseArgs: Omit<Parameters<typeof runRiskyPathInBackground>[0], "client"> = {
   sessionID: "sess_main",
   permissionID: "perm_123",
   command: "rm -rf build",
   reason: "destructive rm",
   sound: true,
   timeoutSec: 60,
+  macosNotificationPolicy: "all",
+  log: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }
 
 describe("runRiskyPathInBackground", () => {
@@ -157,5 +178,83 @@ describe("runRiskyPathInBackground", () => {
 
     const args = mockedSend.mock.calls[0]?.[0]
     expect(args?.message.length).toBeLessThan(400)
+  })
+
+  describe("macosNotificationPolicy and TUI toast behavior", () => {
+    it("shows a TUI warning toast and does NOT send macOS notification when policy is classifier-failure-only", async () => {
+      // Given: macosNotificationPolicy is classifier-failure-only
+      const { client, showToast } = makeMockClient()
+      const args = {
+        ...baseArgs,
+        client,
+        macosNotificationPolicy: "classifier-failure-only" as const,
+      }
+
+      // When: runRiskyPathInBackground is called for a RISKY command
+      await runRiskyPathInBackground(args)
+
+      // Then: client.tui.showToast is called with body containing warning variant, title containing RISKY, message containing command and reason, and sendNotification is NOT called
+      expect(showToast).toHaveBeenCalledTimes(1)
+      expect(showToast).toHaveBeenCalledWith({
+        body: expect.objectContaining({
+          title: expect.stringMatching(/RISKY/),
+          message: expect.stringContaining("rm -rf build"),
+          variant: "warning",
+          duration: expect.any(Number),
+        }),
+      })
+      const toastArg = showToast.mock.calls[0]?.[0]
+      expect(toastArg?.body.message).toContain("destructive rm")
+      expect(mockedSend).not.toHaveBeenCalled()
+    })
+
+    it("shows a TUI warning toast AND sends macOS notification when policy is all", async () => {
+      // Given: macosNotificationPolicy is all
+      mockedSend.mockResolvedValueOnce({ type: "timeout" } as NotifyActionResult)
+      const { client, showToast } = makeMockClient()
+      const args = {
+        ...baseArgs,
+        client,
+        macosNotificationPolicy: "all" as const,
+      }
+
+      // When: runRiskyPathInBackground is called
+      await runRiskyPathInBackground(args)
+
+      // Then: client.tui.showToast AND sendNotification are both called
+      expect(showToast).toHaveBeenCalledTimes(1)
+      expect(showToast).toHaveBeenCalledWith({
+        body: expect.objectContaining({
+          title: expect.stringMatching(/RISKY/),
+          message: expect.stringContaining("rm -rf build"),
+          variant: "warning",
+        }),
+      })
+      expect(mockedSend).toHaveBeenCalledTimes(1)
+    })
+
+    it("does NOT automatically respond or throw when client.tui.showToast fails", async () => {
+      // Given: client.tui.showToast throws an error
+      const { client, call, showToast } = makeMockClient()
+      showToast.mockRejectedValueOnce(new Error("toast failed"))
+      const args = {
+        ...baseArgs,
+        client,
+        macosNotificationPolicy: "classifier-failure-only" as const,
+      }
+
+      // When: runRiskyPathInBackground is called
+      await expect(runRiskyPathInBackground(args)).resolves.toBeUndefined()
+
+      // Then: error is caught (does not throw), logged as warning, and permission is NOT auto-responded (maintains standard TUI approval)
+      expect(args.log.warn).toHaveBeenCalledTimes(1)
+      expect(args.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("toast"),
+        expect.objectContaining({
+          error: "toast failed",
+        }),
+      )
+      expect(call).not.toHaveBeenCalled()
+    })
   })
 })

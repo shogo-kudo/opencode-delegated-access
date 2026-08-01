@@ -118,6 +118,8 @@ function buildCtx(overrides: Partial<{
   notifyOnClassifierFailure: boolean
   failureNotifyRateLimiter: FailureNotifyRateLimiter
   ephemeralSystemRegistry: EphemeralSystemRegistry
+  macosNotificationPolicy: "classifier-failure-only" | "all"
+  safeCountdownMs: number
 }> = {}) {
   const respondCall = vi.fn(
     overrides.respondImpl ?? (async () => ({ data: true } as unknown)),
@@ -149,6 +151,12 @@ function buildCtx(overrides: Partial<{
         : {}),
       ...(overrides.notifyOnClassifierFailure !== undefined
         ? { notifyOnClassifierFailure: overrides.notifyOnClassifierFailure }
+        : {}),
+      ...(overrides.macosNotificationPolicy !== undefined
+        ? { macosNotificationPolicy: overrides.macosNotificationPolicy }
+        : {}),
+      ...(overrides.safeCountdownMs !== undefined
+        ? { safeCountdownMs: overrides.safeCountdownMs }
         : {}),
     },
     sessionModel:
@@ -1429,5 +1437,73 @@ describe("dual repo context wiring", () => {
       pinned: { branch: "feat/x" },
       current: { branch: "feat/x" },
     })
+  })
+})
+
+describe("macosNotificationPolicy handling", () => {
+  it("passes macosNotificationPolicy and logger to runRiskyPathInBackground when verdict is RISKY", async () => {
+    // Given: classifier returns RISKY and macosNotificationPolicy is set
+    mockedClassify.mockResolvedValueOnce({
+      verdict: "RISKY",
+      reason: "destructive",
+    })
+    mockedRisky.mockResolvedValue(undefined)
+    const { ctx, log } = buildCtx({
+      macosNotificationPolicy: "classifier-failure-only",
+    })
+
+    // When: handlePermissionEvent is called
+    await handlePermissionEvent(
+      basePermission({ pattern: "rm -rf /" }),
+      ctx,
+    )
+
+    // Then: runRiskyPathInBackground is called with macosNotificationPolicy and logger
+    expect(mockedRisky).toHaveBeenCalledTimes(1)
+    const args = mockedRisky.mock.calls[0]?.[0]
+    expect(args?.macosNotificationPolicy).toBe("classifier-failure-only")
+    expect(args?.log).toBe(log)
+  })
+
+  it("passes countdownMs=0 to runSafePath when macosNotificationPolicy is classifier-failure-only even if safeCountdownMs > 0", async () => {
+    // Given: verdict is SAFE, safeCountdownMs > 0, and macosNotificationPolicy is classifier-failure-only
+    mockedClassify.mockResolvedValueOnce({
+      verdict: "SAFE",
+      reason: "read-only",
+    })
+    mockedSafe.mockResolvedValueOnce("allow")
+    const { ctx } = buildCtx({
+      safeCountdownMs: 5000,
+      macosNotificationPolicy: "classifier-failure-only",
+    })
+
+    // When: handlePermissionEvent is called
+    await handlePermissionEvent(basePermission(), ctx)
+
+    // Then: runSafePath is called with countdownMs=0
+    expect(mockedSafe).toHaveBeenCalledTimes(1)
+    const args = mockedSafe.mock.calls[0]?.[0]
+    expect(args?.countdownMs).toBe(0)
+  })
+
+  it("passes configured safeCountdownMs to runSafePath when macosNotificationPolicy is all", async () => {
+    // Given: verdict is SAFE, safeCountdownMs = 5000, and macosNotificationPolicy is all
+    mockedClassify.mockResolvedValueOnce({
+      verdict: "SAFE",
+      reason: "read-only",
+    })
+    mockedSafe.mockResolvedValueOnce("allow")
+    const { ctx } = buildCtx({
+      safeCountdownMs: 5000,
+      macosNotificationPolicy: "all",
+    })
+
+    // When: handlePermissionEvent is called
+    await handlePermissionEvent(basePermission(), ctx)
+
+    // Then: runSafePath is called with configured countdownMs (5000)
+    expect(mockedSafe).toHaveBeenCalledTimes(1)
+    const args = mockedSafe.mock.calls[0]?.[0]
+    expect(args?.countdownMs).toBe(5000)
   })
 })

@@ -1,5 +1,7 @@
 import type { createOpencodeClient } from "@opencode-ai/sdk"
 import { sendNotification } from "../notify/notify.ts"
+import type { DelegatedAccessConfig } from "../config.ts"
+import type { Logger } from "../log.ts"
 
 type OpencodeClient = ReturnType<typeof createOpencodeClient>
 
@@ -11,27 +13,9 @@ const APPROVE_LABEL = "Approve"
 const REJECT_LABEL = "Reject"
 
 /**
- * Drive the RISKY-path notification _in the background_, alongside opencode's
- * normal TUI permission prompt.
- *
- * Called AFTER the plugin's `permission.ask` hook has already resolved with
- * `output.status = "ask"`, so opencode is already showing its in-TUI prompt.
- * This function fires and awaits the notification independently:
- *
- *   - If the user clicks **Approve** in the notification, we call the SDK to
- *     resolve the permission with `response: "once"` — this closes the TUI
- *     prompt programmatically and opencode proceeds with the command.
- *   - If they click **Reject**, we call the SDK with `response: "reject"` —
- *     same deal, but opencode blocks the command.
- *   - Any other outcome (timeout, cancel, body click, notifier error, unknown
- *     action label) is a no-op: the TUI prompt is still live and the user
- *     can respond there as normal.
- *
- * SDK errors are swallowed — the TUI prompt remains as a fallback, so a
- * transient SDK failure doesn't leave the user stranded.
- *
- * This function is expected to be called with fire-and-forget semantics; it
- * never returns anything useful and never throws.
+ * Show a RISKY warning in OpenCode while leaving its permission prompt active.
+ * The `all` policy also enables the legacy interactive macOS notification.
+ * Any UI or SDK failure leaves the prompt available for a human decision.
  */
 export async function runRiskyPathInBackground(args: {
   client: OpencodeClient
@@ -41,9 +25,20 @@ export async function runRiskyPathInBackground(args: {
   reason: string
   sound: boolean
   timeoutSec: number
+  macosNotificationPolicy: DelegatedAccessConfig["macosNotificationPolicy"]
+  log: Logger
 }): Promise<void> {
-  const { client, sessionID, permissionID, command, reason, sound, timeoutSec } =
-    args
+  const {
+    client,
+    sessionID,
+    permissionID,
+    command,
+    reason,
+    sound,
+    timeoutSec,
+    macosNotificationPolicy,
+    log,
+  } = args
 
   const displayCmd =
     command.length > COMMAND_DISPLAY_MAX
@@ -51,6 +46,28 @@ export async function runRiskyPathInBackground(args: {
       : command
 
   const displayReason = reason.length > 0 ? ` (${reason})` : ""
+
+  try {
+    await client.tui.showToast({
+      body: {
+        title: "delegated-access: RISKY command",
+        message: `${displayCmd}${displayReason}`,
+        variant: "warning",
+        duration: timeoutSec * 1000,
+      },
+    })
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e)
+    log.warn("failed to show TUI toast for risky command", {
+      permissionID,
+      sessionID,
+      error,
+    })
+  }
+
+  if (macosNotificationPolicy !== "all") {
+    return
+  }
 
   const result = await sendNotification({
     title: "delegated-access: review risky command",
