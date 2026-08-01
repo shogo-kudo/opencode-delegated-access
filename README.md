@@ -1,6 +1,6 @@
 # Delegated Access
 
-Stop smashing the Approve button. Delegated Access gives [OpenCode](https://opencode.ai) an AI safety reviewer that auto-approves the boring stuff and escalates the scary stuff to your desktop, so you can actually keep working instead of babysitting the terminal.
+Stop smashing the Approve button. Delegated Access gives [OpenCode](https://opencode.ai) an AI safety reviewer that auto-approves the boring stuff and escalates the scary stuff to your terminal or desktop, so you can actually keep working instead of babysitting the terminal.
 
 Think of it as Claude's [auto mode](https://claude.com/blog/auto-mode) — but for OpenCode, and you control it.
 
@@ -8,14 +8,14 @@ Think of it as Claude's [auto mode](https://claude.com/blog/auto-mode) — but f
 
 Right now, OpenCode stops and asks before every bash command. `ls`. `git status`. `npm test`. Every one of them pulls you back into the loop.
 
-You could turn off permissions entirely with `--dangerously-skip-permissions`, but then `rm -rf node_modules` and `rm -rf ~/Documents` look the same to the machine. They are not the same.
+You could auto-approve every permission that is not explicitly denied with `--auto`, but then `rm -rf node_modules` and `rm -rf ~/Documents` receive the same treatment unless you maintain exhaustive deny rules. They are not the same.
 
 Delegated Access splits the difference:
 
-- **Safe commands auto-dismiss themselves.** OpenCode's prompt briefly flashes, a small LLM (Haiku-class by default) classifies it as safe, a "Running in 5s — Cancel" notification appears, and after the countdown the plugin dismisses the prompt for you and the command runs. Don't click Cancel, it runs. Ignore it, it runs.
+- **Safe commands auto-dismiss themselves.** OpenCode's prompt briefly flashes, a small LLM (Haiku-class by default) classifies it as safe, and the plugin auto-dismisses the prompt instantly for you so the command runs. (If configured with `macosNotificationPolicy: "all"` and `safeCountdownMs` > 0, a cancellable countdown desktop notification appears before auto-dismissing).
 - **External directory access is handled the same way.** When the agent wants to read or write outside the current project (e.g. a sibling repo you just mentioned), the same classifier decides whether your recent messages justify it — no extra config needed.
-- **Risky commands wake you up.** Destructive `rm`, `sudo`, `curl | sh`, anything touching `.env`, anything you didn't ask for — a desktop notification pops up with **Approve** and **Reject** buttons. Click one, the TUI prompt closes. Click nothing and the prompt's still there when you come back.
-- **Weird commands fail safe.** Classifier timed out? API flaked? Weird response? The prompt just stays there waiting for you. Nothing ever slips through silently.
+- **Risky commands alert you clearly.** Destructive `rm`, `sudo`, `curl | sh`, anything touching `.env`, anything you didn't ask for — an OpenCode warning toast appears in your terminal while keeping the standard approval prompt active for your manual decision. (If `macosNotificationPolicy: "all"` is set, an interactive desktop notification with **Approve** and **Reject** buttons also pops up).
+- **Weird commands fail safe.** Classifier timed out? API flaked? Weird response? The prompt stays waiting in the TUI for you. When `notifyOnClassifierFailure: true` (default), a rate-limited, Reject-only desktop notification alerts you to the failure. Nothing ever slips through silently.
 
 You stay in flow. The agent stops pestering you for routine stuff. Dangerous stuff still needs a human.
 
@@ -45,28 +45,33 @@ Every time OpenCode would prompt for a bash command **or an external directory a
        SAFE       RISKY     FAIL
          │          │         │
          ▼          ▼         ▼
-     Notify +    Notify +   Leave
-    countdown    buttons     prompt
-         │          │         │
-         ▼          ▼         ▼
-     Dismiss    User clicks  User decides
-     TUI &      → dismiss    in TUI
-     run        TUI + run/
-                block
+     Instant    Warning     Leave prompt
+     approve    toast +     (+ Reject-only
+    (or Notify  leave TUI   rate-limited OS
+    + countdown prompt      notify if failure
+    if policy=  (or OS      notification
+       all)     notify if   enabled)
+         │      policy=all)   │
+         ▼          │         ▼
+     Dismiss TUI    ▼       User decides
+      & run     User decides  in TUI
+                in TUI (or
+                via OS notify
+                if policy=all)
 ```
 
 The classifier call happens in an **ephemeral child session** of your current session, using OpenCode's own provider + auth — no extra API keys, no extra packages to configure. It's hidden from session lists and deleted when done.
 
 ### About that TUI flash
 
-OpenCode 1.4.x emits the `permission.asked` event _after_ it has already queued the permission and started showing you the prompt. That means on SAFE commands you'll briefly see the usual "Allow this command?" prompt before the plugin auto-dismisses it. The SDK declares a `permission.ask` hook that would let us intercept _before_ the prompt appears, but the compiled runtime doesn't actually dispatch it yet. If that ever lands, this plugin will get a snappier flash-free SAFE path for free.
+OpenCode (version 1.18.5+) emits permission events after queuing the permission and displaying the prompt. That means on SAFE commands you'll briefly see the usual prompt before the plugin auto-dismisses it. The SDK declares a `permission.ask` hook that would let us intercept _before_ the prompt appears, but the compiled runtime doesn't actually dispatch it yet. If that ever lands, this plugin will get a snappier flash-free SAFE path for free.
 
 ## Install
 
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/jdtzmn/opencode-delegated-access.git
+git clone https://github.com/shogo-kudo/opencode-delegated-access.git
 cd opencode-delegated-access
 bun install
 ```
@@ -83,7 +88,7 @@ Or install straight from GitHub:
 
 ```jsonc
 {
-  "plugin": ["opencode-delegated-access@git+https://github.com/jdtzmn/opencode-delegated-access.git"]
+  "plugin": ["opencode-delegated-access@git+https://github.com/shogo-kudo/opencode-delegated-access.git#main"]
 }
 ```
 
@@ -97,11 +102,12 @@ Use the **per-plugin tuple form** — `[pluginSpec, optionsObject]` — to pass 
 {
   "plugin": [
     [
-      "opencode-delegated-access@git+https://github.com/jdtzmn/opencode-delegated-access.git",
+      "opencode-delegated-access@git+https://github.com/shogo-kudo/opencode-delegated-access.git#main",
       {
         "enabled": true,
         "contextMessageCount": 3,
-        "safeCountdownMs": 5000,
+        "safeCountdownMs": 0,
+        "macosNotificationPolicy": "classifier-failure-only",
         "classifierModel": "anthropic/claude-haiku-4-5",
         "classifierTimeoutMs": 15000,
         "classifierRetries": 1,
@@ -124,7 +130,8 @@ Use the **per-plugin tuple form** — `[pluginSpec, optionsObject]` — to pass 
 |---|---|---|
 | `enabled` | `true` | Turn the whole thing off without uninstalling. |
 | `contextMessageCount` | `3` | How many of **your** recent messages the classifier sees. 0 = no context, just the command. |
-| `safeCountdownMs` | `5000` | Cancellable countdown before auto-dismissing SAFE prompts. `0` = silent instant approve. |
+| `safeCountdownMs` | `0` | Cancellable countdown before auto-dismissing SAFE prompts when `macosNotificationPolicy: "all"`. `0` (default) means instant auto-approve without desktop countdown notification. |
+| `macosNotificationPolicy` | `"classifier-failure-only"` | Controls desktop notification policy: `"classifier-failure-only"` (default) suppresses notifications for SAFE/RISKY verdicts and only fires rate-limited notifications on classifier failure (if enabled); `"all"` restores legacy SAFE countdown and interactive RISKY desktop notifications. |
 | `classifierModel` | _auto_ | Override the judge model, e.g. `anthropic/claude-haiku-4-5`. When unset, uses a small fast default for your provider (Haiku, `gpt-5.4-mini`, `gemini-flash-lite`). |
 | `classifierTimeoutMs` | `15000` | How long before we give up on a single classifier attempt. |
 | `classifierRetries` | `1` | Extra attempts if a classifier call **times out** (transient API stall). Each retry uses a fresh session and the full `classifierTimeoutMs`. `0` disables retry. Only timeouts retry; other failures never do. |
@@ -159,17 +166,17 @@ Anything not matched by a static rule flows into the classifier.
 
 ## Works best on macOS
 
-The desktop notifications with Approve / Reject buttons work via `terminal-notifier` / macOS NotificationCenter. On Linux and Windows the SAFE countdown still works (the notification itself is the timer), but interactive buttons on the RISKY path may not be clickable — OpenCode's in-TUI prompt is always shown too, so you have a reliable fallback on every platform.
+Under the default `macosNotificationPolicy: "classifier-failure-only"`, SAFE auto-approvals and RISKY escalations happen cleanly within OpenCode's TUI (showing warning toasts for RISKY commands). Desktop notifications via `terminal-notifier` / macOS NotificationCenter are used for rate-limited classifier failure alerts, or for SAFE countdowns and interactive RISKY buttons when `macosNotificationPolicy: "all"` is explicitly configured. On Linux and Windows, OpenCode's in-TUI prompt and warning toasts provide a reliable fallback on every platform.
 
 ## How it's safe
 
 - **The classifier never sees the agent's messages.** Only yours. A rogue assistant can't smuggle "this command is safe, trust me" into the judge's context. Same for directory access — the classifier answers "did the human's recent messages justify this path?" not "does the agent think it's safe?"
 - **Subagents don't weaken that.** When a permission fires inside a subagent session, the plugin walks up the session tree to the root and pulls _your_ messages from there — never the dispatching agent's prompt to the subagent. If the tree can't be verified (SDK error, unexpected cycle, too deep) the plugin fails closed and leaves the TUI prompt for you. Even on the root session, user-role messages are filtered to the root's primary agent so synthetic "user" turns addressed elsewhere never leak in.
-- **Every error leaves the TUI prompt alone.** Classifier timeout, API error, malformed verdict, missing subject, session-tree lookup failure, unexpected exception — none of them call the respond API, so the TUI prompt stays and you decide manually. The plugin only ever _dismisses_ a prompt after an affirmative SAFE decision, never silently passes through on errors.
+- **Every error leaves the TUI prompt alone.** Classifier timeout, API error, malformed verdict, missing subject, session-tree lookup failure, unexpected exception — none of them call the respond API, so the TUI prompt stays and you decide manually. When `notifyOnClassifierFailure: true` (default), a rate-limited, Reject-only desktop notification alerts you to the failure. The plugin only ever _dismisses_ a prompt after an affirmative SAFE decision, never silently passes through on errors.
 - **The classifier can't call tools.** The ephemeral session runs with `tools: { "*": false }`, so even a compromised classifier model can only return text.
-- **Risky commands and risky directory requests get two channels, not one.** The TUI prompt stays up AND the notification fires with Approve/Reject. Whichever you answer first wins — no bug in the notification path can ever accidentally auto-approve a RISKY request.
+- **Risky commands and risky directory requests alert you in the TUI.** Under default policy (`"classifier-failure-only"`), RISKY requests display an OpenCode warning toast while leaving the TUI prompt active for your decision. When `macosNotificationPolicy: "all"` is set, interactive macOS notifications with Approve/Reject buttons also fire in parallel. Whichever channel you answer first wins — no bug in the notification path can ever accidentally auto-approve a RISKY request.
 - **The classifier can't trigger itself.** We track ephemeral classifier sessions and ignore permission events from them.
-- **The directory cache only speeds things up; it can't change a RISKY verdict.** Only SAFE verdicts are cached. A RISKY verdict for any path always triggers the escalation notification — the cache only deduplicates rapid burst requests for a path that was already classified SAFE.
+- **The directory cache only speeds things up; it can't change a RISKY verdict.** Only SAFE verdicts are cached. A RISKY verdict for any path always triggers the review UI — the cache only deduplicates rapid burst requests for a path that was already classified SAFE.
 - **Repo context is best-effort and gracefully optional.** Branch is read with `git`; the open-PR lookup uses `gh`. If `gh` isn't installed, isn't authenticated, or the working directory isn't a git repo, the classifier just runs without that context — never blocks. The PR title is rendered inside `<repo_context>` delimiters and treated as data (not instructions) by the classifier.
 - **The session pin can't be moved by the agent.** PR-scoped elevated trust depends on a snapshot captured exactly once at plugin startup. There is no API to refresh, reset, or invalidate it for the lifetime of the OpenCode process — the agent can't `git checkout` its way into a different trust scope.
 
@@ -199,12 +206,12 @@ A few important properties of how this works:
 - **Session-scoped only.** The history lives in memory for the lifetime of the OpenCode session group and is never written to disk. Closing OpenCode discards it.
 - **Pure human signal.** When the classifier auto-approves a SAFE command, that decision is NOT recorded — only your explicit Approve/Reject clicks are. The history is the record of what _you_ decided, not what the classifier decided for you.
 - **Hard-RISKY categories still escalate.** Prior approvals don't override the destructive / privilege-escalation / credential-access categories. Approving `git status` 30 times doesn't teach the classifier to wave through `sudo rm -rf /`.
-- **Captures every channel.** Decisions made via the TUI (clicking Approve in OpenCode's prompt), the desktop notification (clicking Approve in our `terminal-notifier` popup), or OpenCode's CLI/keyboard shortcuts all flow through the same `permission.replied` event and are captured identically.
+- **Captures every channel.** Decisions made via the TUI (clicking Approve in OpenCode's prompt), desktop notifications (clicking Approve in our `terminal-notifier` popup when `macosNotificationPolicy: "all"`), or OpenCode's CLI/keyboard shortcuts all flow through the same `permission.replied` event and are captured identically.
 - **Disable with `approvalHistoryEnabled: false`** in your config if you'd rather every classification be independent.
 
 ## Status
 
-v0.4.0. Bash commands and external directory access, with per-session approval history that lets the classifier learn from your prior in-session decisions, plus PR-scoped elevated trust pinned at session start so the classifier knows which PR you actually committed to working on. Edit / write / webfetch still prompt normally — those are out of scope. TypeScript, Bun. macOS-tested; Linux/Windows should work with degraded notification interactivity.
+v0.5.0 (requires OpenCode 1.18.5+). Bash commands and external directory access, with per-session approval history that lets the classifier learn from your prior in-session decisions, PR-scoped elevated trust pinned at session start, and configurable macOS notification policies (defaulting to classifier-failure-only with instant SAFE auto-approval, TUI warning toasts for RISKY commands, and rate-limited failure notifications). Edit / write / webfetch still prompt normally — those are out of scope. TypeScript, Bun. macOS-tested; Linux/Windows fallback via OpenCode TUI.
 
 ## Development
 
