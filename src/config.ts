@@ -15,10 +15,10 @@ export const ConfigSchema = z.object({
   contextMessageCount: z.number().int().min(0).max(20).default(3),
 
   /**
-   * For SAFE commands, how long to show the cancellable notification before
-   * auto-approving. 0 disables the countdown (silent auto-approve).
+   * Under the `all` notification policy, how long to show the cancellable
+   * SAFE countdown. The default policy always approves SAFE requests silently.
    */
-  safeCountdownMs: z.number().int().min(0).max(60_000).default(5_000),
+  safeCountdownMs: z.number().int().min(0).max(60_000).default(0),
 
   /**
    * Override for the classifier model, in `providerID/modelID` form.
@@ -42,8 +42,13 @@ export const ConfigSchema = z.object({
    */
   classifierRetries: z.number().int().min(0).max(10).default(1),
 
-  /** Whether OS notifications play a sound. */
+  /** Whether macOS notifications play a sound. */
   notificationSound: z.boolean().default(true),
+
+  /** Select which verdict paths may use macOS notifications. */
+  macosNotificationPolicy: z
+    .enum(["classifier-failure-only", "all"])
+    .default("classifier-failure-only"),
 
   /**
    * When true (default), the plugin also classifies `external_directory`

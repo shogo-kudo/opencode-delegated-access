@@ -27,6 +27,7 @@ describe("ConfigSchema", () => {
       approvalHistoryMax: 100,
       notifyOnClassifierFailure: false,
       classifierFailureNotifyCooldownMs: 30_000,
+      macosNotificationPolicy: "all",
     }
     expect(ConfigSchema.parse(input)).toEqual(input)
   })
@@ -68,10 +69,11 @@ describe("ConfigSchema", () => {
     expect(DEFAULT_CONFIG).toEqual({
       enabled: true,
       contextMessageCount: 3,
-      safeCountdownMs: 5000,
+      safeCountdownMs: 0,
       classifierTimeoutMs: 15_000,
       classifierRetries: 1,
       notificationSound: true,
+      macosNotificationPolicy: "classifier-failure-only",
       externalDirectoryEnabled: true,
       directoryVerdictCacheTtlMs: 60_000,
       approvalHistoryEnabled: true,
@@ -92,6 +94,23 @@ describe("ConfigSchema", () => {
       ConfigSchema.parse({ directoryVerdictCacheTtlMs: -1 }),
     ).toThrow()
   })
+
+  it("preserves explicit macosNotificationPolicy 'all' in parsed config", () => {
+    const parsed = ConfigSchema.parse({
+      macosNotificationPolicy: "all",
+    })
+
+    expect(parsed).toHaveProperty("macosNotificationPolicy", "all")
+  })
+
+  it("rejects unknown macosNotificationPolicy values", () => {
+    expect(() =>
+      ConfigSchema.parse({
+        macosNotificationPolicy: "maybe-sometimes",
+      }),
+    ).toThrow()
+  })
+
 })
 
 describe("approvalHistory options", () => {
