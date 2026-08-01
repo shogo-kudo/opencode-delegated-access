@@ -4,10 +4,9 @@ vi.mock("./permission/handler.ts", () => ({
   handlePermissionEvent: vi.fn(),
 }))
 
-import DelegatedAccess, {
-  handlePermissionReplied,
-  normalizeRepliedProperties,
-} from "./index.ts"
+import DelegatedAccess from "./index.ts"
+import { handlePermissionReplied, normalizeRepliedProperties } from "./permission/replied.ts"
+import * as pluginEntry from "./index.ts"
 import { handlePermissionEvent } from "./permission/handler.ts"
 import { ApprovalHistoryStore } from "./permission/approval-history.ts"
 import { PendingSubjectsMap } from "./permission/pending-subjects.ts"
@@ -63,6 +62,14 @@ function eventInput(type: string, permission: Record<string, unknown>) {
 }
 
 describe("DelegatedAccess plugin entry — shotgun hook registration", () => {
+  it("Given the plugin entry module is namespace-imported, When export keys are enumerated, Then only default should remain and reference DelegatedAccess", () => {
+    const moduleExports = pluginEntry
+    const exportNames = Object.keys(moduleExports).sort()
+
+    expect(exportNames).toEqual(["default"])
+    expect(moduleExports.default).toBe(DelegatedAccess)
+  })
+
   it("registers config, permission.ask, permission.updated, and event hooks", async () => {
     const hooks = await makePluginHooks()
     expect(typeof hooks["config"]).toBe("function")
